@@ -4,7 +4,14 @@ This repository provides a machine annotation service for plant organ segmentati
 
 ---
 
-## Install Dependencies
+## Create and Activate a virtual environment
+
+```bash
+conda create -n plant_organ_segmentation python=3.12.3
+conda activate plant_organ_segmentation
+```
+
+## Install dependencies
 
 To set up the environment, follow these steps:
 
