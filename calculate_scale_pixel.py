@@ -10,7 +10,6 @@ from model import get_model_instance_segmentation
 from PIL import Image
 from utils.parameters import *
 from torchvision.transforms import functional as F
-from sklearn.metrics import precision_score, recall_score, f1_score
 from Levenshtein import distance as levenshtein_distance
 
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
