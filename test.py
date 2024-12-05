@@ -80,22 +80,32 @@ def prediction(model, data_loader, device, iou_threshold=0.5, score_threshold=0.
                 image_counter += 1
                 print(f"Running inference on Herbarium sheet:{image_name}")           
 
-                while not fits_in_memory and downscale_factor > 0.1:
+                min_scale, max_scale = 0.1, 1.0
+                while not fits_in_memory and max_scale > min_scale:
                     try:
+                        downscale_factor = (min_scale + max_scale) / 2
                         new_height, new_width = int(original_image.shape[0] * downscale_factor), int(original_image.shape[1] * downscale_factor)
                         downscaled_image = cv2.resize(original_image, (new_width, new_height))
                         img_tensor = F.to_tensor(downscaled_image).unsqueeze(0).to(device)
                         with torch.no_grad():
-                            predictions = model(img_tensor)            
+                            predictions = model(img_tensor)
                         fits_in_memory = True 
+
                     except RuntimeError as e:
                         if "out of memory" in str(e):
-                            logging.warning(f"Out of memory at scale {downscale_factor}. Reducing scale and retrying.")
+                            logging.warning(f"Out of memory at scale {downscale_factor:.2f}. Adjusting scale.")
                             torch.cuda.empty_cache()
-                            downscale_factor *= 0.8
+                            max_scale = downscale_factor
                         else:
                             raise e
-                           
+                            
+                    finally:
+                        del img_tensor
+                        torch.cuda.empty_cache()
+
+                if not fits_in_memory:
+                    raise RuntimeError("Failed to process the image within memory constraints.")
+                                    
                 pred = predictions[0]
                 boxes = pred['boxes'].cpu()
                 labels = pred['labels'].cpu()

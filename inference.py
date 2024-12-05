@@ -27,24 +27,32 @@ def prediction(original_image, model, device, iou_threshold=0.5, score_threshold
     downscale_factor = initial_downscale_factor
     downscaled_image = original_image
     fits_in_memory = False
+    min_scale, max_scale = 0.1, 1.0
 
-    while not fits_in_memory and downscale_factor > 0.1:
+    while not fits_in_memory and max_scale > min_scale:
         try:
+            downscale_factor = (min_scale + max_scale) / 2
             new_height, new_width = int(original_image.shape[0] * downscale_factor), int(original_image.shape[1] * downscale_factor)
             downscaled_image = cv2.resize(original_image, (new_width, new_height))
             img_tensor = F.to_tensor(downscaled_image).unsqueeze(0).to(device)
-            
             with torch.no_grad():
                 predictions = model(img_tensor)
-            
             fits_in_memory = True 
+
         except RuntimeError as e:
             if "out of memory" in str(e):
-                logging.warning(f"Out of memory at scale {downscale_factor}. Reducing scale and retrying.")
+                logging.warning(f"Out of memory at scale {downscale_factor:.2f}. Adjusting scale.")
                 torch.cuda.empty_cache()
-                downscale_factor *= 0.8
+                max_scale = downscale_factor
             else:
                 raise e
+                
+        finally:
+            del img_tensor
+            torch.cuda.empty_cache()
+
+    if not fits_in_memory:
+        raise RuntimeError("Failed to process the image within memory constraints.")
 
     #output, output_image = process_predictions(device, original_image, downscaled_image, predictions, downscale_factor, score_threshold, iou_threshold)
     output = process_predictions(device, original_image, downscaled_image, predictions, downscale_factor, score_threshold, iou_threshold)
@@ -81,7 +89,7 @@ def process_predictions(device, original_image, downscaled_image, predictions, d
     one_cm_in_pixel, scale_detection_counter, boxes_scale, scale_text_recognition_counter, metrics = get_scale_cm(original_image, downscaled_image, downscale_factor, score_threshold, device, scale_detection_counter, scale_text_recognition_counter)
 
     output = []  
-    img_tensor = F.to_tensor(original_image).unsqueeze(0)
+    #img_tensor = F.to_tensor(original_image).unsqueeze(0)
     #output_image = img_tensor.clone().squeeze(0)
     #font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
