@@ -5,8 +5,10 @@ import os
 import uuid
 import requests
 import logging
+import imghdr
 import websocket
 import json
+from ultralytics import YOLO
 
 from torchvision.transforms import functional as F
 from torchvision.transforms import v2 as T
@@ -18,6 +20,11 @@ from utils_helper import get_transform, clear_cuda, get_random_color, load_model
 from calculate_scale_pixel import get_scale_cm
 from model import get_model_instance_segmentation
 from utils.parameters import *
+from label_recognition import get_text_labels
+
+
+model_text = YOLO('models/best_text.pt')
+
 
 folder_path = 'static/images'
 os.makedirs(folder_path, exist_ok=True)
@@ -81,13 +88,15 @@ def process_predictions(device, original_image, downscaled_image, predictions, d
     upscale_factor = 1 / downscale_factor
     boxes *= upscale_factor
     masks = torch.nn.functional.interpolate(masks.unsqueeze(1).float(), size=original_image.shape[:2], mode="bilinear", align_corners=False).squeeze(1)
-    masks = masks > score_threshold  
 
     scale_detection_counter = 0
     scale_text_recognition_counter = 0
 
     one_cm_in_pixel, scale_detection_counter, boxes_scale, scale_text_recognition_counter, metrics = get_scale_cm(original_image, downscaled_image, downscale_factor, score_threshold, device, scale_detection_counter, scale_text_recognition_counter)
 
+    #if one_cm_in_pixel > 0:
+      #  print(f"One cm in pixel is {one_cm_in_pixel}")
+    
     output = []  
     #img_tensor = F.to_tensor(original_image).unsqueeze(0)
     #output_image = img_tensor.clone().squeeze(0)
@@ -122,8 +131,54 @@ def process_predictions(device, original_image, downscaled_image, predictions, d
             "polygon": polygons
         })
 
+        
+        #print(f"The class is {HERBARIUM_CLASSES[labels[i].item()]} and the score is {score} and the area in pixel is {area} and the area in cm is {pixel_area_in_cm}")
+
         #output_image = draw_bounding_boxes(output_image, boxes[i].unsqueeze(0), labels=[label_text], colors=[color], width=10, font=font_path, font_size=100)
         #output_image = draw_segmentation_masks(output_image, boolean_mask.unsqueeze(0), alpha=0.5, colors=[color])
+
+    text_result = model_text.predict(
+            source=original_image, 
+            imgsz=1024,
+            save=False, 
+            save_txt=False, 
+            save_conf=True
+        )  
+    
+    for class_id, c in enumerate(text_result):
+        if not c.boxes or c.boxes.conf.tolist()[0] < 0.5:
+            continue
+
+        bbox = c.boxes.xyxy.tolist()[0]
+        x_min, y_min, x_max, y_max = map(int, bbox)
+
+        cropped_img = original_image[y_min:y_max, x_min:x_max]
+
+
+        detected_labels = get_text_labels(cropped_img)
+
+        output.append({
+            "boundingBox": bbox,
+            "class": c.names[c.boxes.cls.tolist()[0]],
+            "score": c.boxes.conf.tolist()[0],
+            "detected_labels": detected_labels
+        })
+
+
+        random_color = get_random_color()
+            
+
+        """output_image = draw_bounding_boxes(output_image, 
+                                           boxes=torch.tensor([[x_min, y_min, x_max, y_max]]).to(torch.float32),
+                                           labels=[f"{c.names[c.boxes.cls.tolist()[0]]}: {c.boxes.conf.tolist()[0]:.2f}"], 
+                                           colors=[random_color],
+                                           width=10,
+                                           font=font_path, 
+                                           font_size=100) 
+        
+        
+        with open('output.json', 'w') as json_file:
+            json.dump(output, json_file, indent=4) """
 
     #return output, output_image
     return output
@@ -136,7 +191,7 @@ def save_prediction_image(original_image, output_image):
 def predict_organs(image):
     num_classes = len(HERBARIUM_CLASSES)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    checkpoint_path = 'plant_organ_model_checkpoint.pth'
+    checkpoint_path = 'models/plant_organ_model_checkpoint.pth'
     model = get_model_instance_segmentation(num_classes)
     
     if os.path.exists(checkpoint_path):
@@ -148,18 +203,28 @@ def predict_organs(image):
         raise FileNotFoundError("The model checkpoint path is not found")
 
 def process_data(data):
-    image_url = data.get("message")
-    image_url_response = requests.get(image_url)    
-    image = Image.open(BytesIO(image_url_response.content)).convert("RGB")
-    image_np = np.array(image)
-
-    output = predict_organs(image_np)
-    return {
-        "image_url": image_url,
-        "image_height": image_np.shape[0],
-        "image_width": image_np.shape[1],
-        "output": output
-    }
+    try:
+        image_url = data.get("message")
+        image_url_response = requests.get(image_url, timeout=10)  
+        image_bytes = BytesIO(image_url_response.content)
+        image_format = imghdr.what(image_bytes)
+        if image_format:
+            image = Image.open(BytesIO(image_url_response.content)).convert("RGB")
+            image_np = np.array(image)
+            if isinstance(image_np, np.ndarray) and len(image_np.shape) == 3 and image_np.shape[2] == 3:
+                output = predict_organs(image_np)
+                return {
+                    "image_url": image_url,
+                    "image_height": image_np.shape[0],
+                    "image_width": image_np.shape[1],
+                    "output": output
+                }
+        else:
+            requests.post("http://0.0.0.0:8000/error_message", json={"image_url": image_url, "error" : "The content is not a valid image"})
+    except Exception as e:
+        print(f"Error: {e}")
+        requests.post("http://0.0.0.0:8000/error_message", json={"image_url": image_url, "error" : "The error occured while processing the request. Please contact the administrator."})
+        return False 
 
 def on_message(ws, message):
     try:
@@ -168,8 +233,8 @@ def on_message(ws, message):
             return
 
         response_payload = process_data(data)
-        requests.post("http://0.0.0.0:8000/processed_message", json=response_payload)
-
+        if response_payload:
+            requests.post("http://0.0.0.0:8000/processed_message", json=response_payload)
     except requests.RequestException as e:
         logging.error(f"An error occurred during the request: {str(e)}")
     except Exception as e:

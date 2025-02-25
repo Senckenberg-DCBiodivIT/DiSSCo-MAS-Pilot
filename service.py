@@ -18,8 +18,15 @@ class ProcessedMessageRequest(BaseModel):
     image_height: int
     image_width: int
 
+class ErrorMessageRequest(BaseModel):
+    image_url: str
+    error: str
+
+
 message_queue: List[str] = []
 processed_messages: Dict[str, Dict] = {}
+error_messages: Dict[str, Dict] = {}
+
 active_connections: List[WebSocket] = []
 
 
@@ -34,8 +41,14 @@ async def plant_organ_segmentation(request: ImageRequest):
         start_time = asyncio.get_event_loop().time()
 
         while request.image_url not in processed_messages and (asyncio.get_event_loop().time() - start_time) <=timeout:
-            await asyncio.sleep(1)
-
+            if request.image_url in error_messages:
+                error_data = error_messages[request.image_url]["error"]
+                response = JSONResponse(content={"error": error_data}, status_code=500)
+                del error_messages[request.image_url]
+                return response
+            
+            await asyncio.sleep(1)   
+        
         if request.image_url not in processed_messages:
             return JSONResponse(content={"error": "Processing took too long."}, status_code=504)
             
@@ -64,14 +77,23 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1000)
 
 
+@app.post("/error_message")
+async def processed_message(request: ErrorMessageRequest):
+    error_message =  {
+        "image_url": request.image_url,
+        "error": request.error
+    }
+    error_messages[request.image_url] = error_message
+
+
 @app.post("/processed_message")
 async def processed_message(request: ProcessedMessageRequest):
     try:
         processed_data = {
-                "image_url": request.image_url,
-                "output": request.output,
-                "image_height": request.image_height,
-                "image_width": request.image_width
+            "image_url": request.image_url,
+            "output": request.output,
+            "image_height": request.image_height,
+            "image_width": request.image_width
             }
 
         processed_messages[request.image_url] = processed_data

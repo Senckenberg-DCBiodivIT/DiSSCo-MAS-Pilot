@@ -39,10 +39,15 @@ To start the server using `uvicorn`, run the `service.py` script. This will init
 
 The `uvicorn` service forwards incoming requests to the WebSocket, where inference is performed and additional information such as surface area and other plant organ properties are extracted. To run the WebSocket process and handle inference, execute the following command:
   
-  Start the websocket:
+  To start the websocket for Mask R-CNN model inference:
   ```bash
   python inference.py
   ```
+  or to start the websocket for YOLO11 model inference:
+  ```bash
+  python inference_yolo.py
+  ```
+  
 
 ### Standalone Testing
 

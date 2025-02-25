@@ -4,12 +4,14 @@ import pytesseract
 import torch
 import warnings
 import logging
+import os
 
 from pytesseract import Output
 from model import get_model_instance_segmentation
 from PIL import Image
 from utils.parameters import *
 from torchvision.transforms import functional as F
+from torchvision.transforms import v2 as T
 from Levenshtein import distance as levenshtein_distance
 
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,7 +20,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 ground_truth = list(range(0, 10))
 
 def get_scale_cm(original_image, downscaled_image, downscale_factor, score_threshold, device, scale_detection_counter=0, scale_text_recognition_counter=0): 
-    checkpoint_path = 'scale_model_checkpoint.pth'
+    checkpoint_path = 'models/scale_model_checkpoint.pth'
     model = get_model_instance_segmentation(num_classes)
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -53,7 +55,7 @@ def get_scale_cm(original_image, downscaled_image, downscale_factor, score_thres
         print("No scale is detected")
 
 
-    return 0, scale_detection_counter, None, scale_text_recognition_counter
+    return 0, scale_detection_counter, None, scale_text_recognition_counter, 0
 
 
 def rotate_if_vertical(image):  
@@ -84,8 +86,10 @@ def filter_inconsistent_digits(digits_info, threshold_ratio=0.2):
                 adjusted_distance = pixel_distance / digit_difference if digit_difference > 0 else pixel_distance
                 pixel_distances.append(adjusted_distance)
 
-    if pixel_distances:
-        median_distance = np.median(pixel_distances)
+    if len(pixel_distances) == 0:
+        return []
+    
+    median_distance = np.median(pixel_distances)
 
     for i in range(len(digits_info)):
         if i == 0:
@@ -197,6 +201,7 @@ def calculate_scale_pixel(image, scale_text_recognition_counter):
             logging.info("No suitable digit pairs found for scale detection")
             consolidated_pixel_distance = 0
 
+    metrics = 0
     if consolidated_pixel_distance > 0 :
         metrics = compute_metrics(filtered_digits)
 
